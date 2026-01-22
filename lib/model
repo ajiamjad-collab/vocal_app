@@ -1,3 +1,11 @@
+https://github.com/ajiamjad-collab/vocal_app
+
+git add .
+git commit -m "fix brands page firestore issue"
+git push
+
+To https://github.com/ajiamjad-collab/vocal_app.git
+
 lib/
   main.dart
   app.dart
