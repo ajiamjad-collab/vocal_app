@@ -25,10 +25,10 @@ class UserProfileRemoteDataSourceImpl implements UserProfileRemoteDataSource {
     required this.auth,
   });
 
-  /// ✅ Always ensures users/{uid} exists
-  /// 1) Try Cloud Function (server-side create of users/{uid} + user/{publicId})
-  /// 2) Verify users/{uid} exists
-  /// 3) If missing -> fallback create from CLIENT (allowed by your rules)
+  /// ✅ Ensures profile exists (server authoritative)
+  /// - Creates users/{uid} + user/{publicUserId} using Cloud Function
+  /// - Verifies users/{uid} exists afterwards
+  /// - No client-side fallback (Firestore rules block it by design)
   @override
   Future<String> createUserProfile({
     required String firstName,
@@ -37,61 +37,30 @@ class UserProfileRemoteDataSourceImpl implements UserProfileRemoteDataSource {
     final u = auth.currentUser;
     if (u == null) throw Exception('No authenticated user.');
 
-    final uid = u.uid;
-    final email = u.email;
+    // 1) Call Cloud Function (server-side create)
+    final callable = functions.httpsCallable('createUserProfile');
 
-    String publicUserId = '';
+    final res = await callable.call(<String, dynamic>{
+      'firstName': firstName.trim(),
+      'lastName': lastName.trim(),
+    });
 
-    // 1) Try Cloud Function
-    try {
-      final callable = functions.httpsCallable('createUserProfile');
-      final res = await callable.call(<String, dynamic>{
-        'firstName': firstName.trim(),
-        'lastName': lastName.trim(),
-      });
+    final raw = res.data;
+    final Map<String, dynamic> data = Map<String, dynamic>.from(raw as Map);
 
-      final raw = res.data;
-      final Map<String, dynamic> data = Map<String, dynamic>.from(raw as Map);
-      publicUserId = (data['publicUserId'] ?? '').toString().trim();
-    } on FirebaseFunctionsException {
-      // ignore here; fallback to client write below
-    } catch (_) {
-      // ignore here; fallback to client write below
+    final publicUserId = (data['publicUserId'] ?? '').toString().trim();
+    if (publicUserId.isEmpty) {
+      throw Exception('Profile created but publicUserId missing.');
     }
 
-    // 2) Verify users/{uid} exists
-    final userRef = firestore.collection('users').doc(uid);
+    // 2) Verify users/{uid} exists (helps detect deployment/region misconfig)
+    final userRef = firestore.collection('users').doc(u.uid);
     final snap = await userRef.get();
-
-    // 3) Fallback client create if missing
     if (!snap.exists) {
-      await userRef.set({
-        'uid': uid,
-        'email': email,
-        'firstName': firstName.trim(),
-        'lastName': lastName.trim(),
-        'displayName': '${firstName.trim()} ${lastName.trim()}'.trim(),
-        'publicUserId': publicUserId, // may be empty if function failed
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-        'provider': u.providerData.map((p) => p.providerId).toList(),
-        'photoUrl': u.photoURL,
-      }, SetOptions(merge: true));
-    } else {
-      // If doc exists but missing names, repair it (optional)
-      final data = snap.data() ?? {};
-      final hasName = (data['firstName'] ?? '').toString().trim().isNotEmpty;
-      if (!hasName) {
-        await userRef.set({
-          'firstName': firstName.trim(),
-          'lastName': lastName.trim(),
-          'displayName': '${firstName.trim()} ${lastName.trim()}'.trim(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
+      throw Exception('Profile creation did not complete. Please retry.');
     }
 
-    return publicUserId; // can be empty if function failed
+    return publicUserId;
   }
 
   @override
