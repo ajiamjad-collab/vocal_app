@@ -1,0 +1,185 @@
+lib/
+  main.dart
+  app.dart
+
+  core/
+    di/service_locator.dart
+    errors/app_exception.dart
+    errors/failure.dart
+    errors/error_mapper.dart
+    network/http_client.dart
+    network/network_info.dart
+    storage/local_storage.dart
+    storage/storage_keys.dart
+    routing/app_router.dart
+    routing/route_names.dart
+
+  shared/widgets/
+    app_button.dart
+    app_text_field.dart
+    app_loader.dart
+    app_snackbar.dart
+    confirm_dialog.dart
+    error_view.dart
+    empty_state.dart
+
+  features/auth/
+    data/datasources/auth_remote_ds.dart
+    data/repositories/auth_repository_impl.dart
+    domain/entities/app_user.dart
+    domain/repositories/auth_repository.dart
+    domain/usecases/
+      sign_in_email.dart
+      sign_in_google.dart
+      sign_up_email.dart
+      send_verification.dart
+      reset_password.dart
+      reload_user.dart
+      reauthenticate.dart
+      delete_account.dart
+      sign_out.dart
+    presentation/bloc/auth_bloc.dart
+    presentation/bloc/auth_event.dart
+    presentation/bloc/auth_state.dart
+    presentation/pages/
+      splash_page.dart
+      login_page.dart
+      signup_page.dart
+      forgot_password_page.dart
+      verify_email_page.dart
+      reauth_page.dart
+      delete_account_page.dart
+      home_page.dart
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+lib/
+  main.dart
+  app.dart
+
+  core/
+    config/
+      env.dart
+      firebase_options.dart
+    constants/
+      app_constants.dart
+    routing/
+      app_router.dart
+      route_names.dart
+      route_guards.dart
+    theme/
+      app_theme.dart
+    utils/
+      logger.dart
+      validators.dart
+      debouncer.dart
+      date_time.dart
+    network/
+      http_client.dart
+      network_info.dart
+      api_endpoints.dart
+    storage/
+      local_storage.dart
+      secure_storage.dart
+      storage_keys.dart
+    errors/
+      app_exception.dart
+      error_mapper.dart
+      failure.dart
+    di/
+      service_locator.dart
+
+  shared/
+    widgets/
+      app_scaffold.dart
+      app_button.dart
+      app_text_field.dart
+      app_loader.dart
+      app_snackbar.dart
+      empty_state.dart
+      error_view.dart
+      confirm_dialog.dart
+    extensions/
+      context_ext.dart
+      string_ext.dart
+
+  features/
+    auth/
+      data/
+        models/
+          app_user_dto.dart
+        datasources/
+          auth_remote_ds.dart
+        repositories/
+          auth_repository_impl.dart
+      domain/
+        entities/
+          app_user.dart
+        repositories/
+          auth_repository.dart
+        usecases/
+          sign_in_email.dart
+          sign_in_google.dart
+          sign_up_email.dart
+          send_verification.dart
+          reset_password.dart
+          reauthenticate.dart
+          delete_account.dart
+          sign_out.dart
+      presentation/
+        bloc/
+          auth_bloc.dart
+          auth_event.dart
+          auth_state.dart
+        pages/
+          splash_page.dart
+          login_page.dart
+          signup_page.dart
+          forgot_password_page.dart
+          verify_email_page.dart
+          reauth_page.dart
+          delete_account_page.dart
+        widgets/
+          auth_form.dart
+
+    products/
+      data/
+      domain/
+      presentation/
+
+    cart/
+      data/
+      domain/
+      presentation/
+
+    orders/
+      data/
+      domain/
+      presentation/

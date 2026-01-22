@@ -1,0 +1,49 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // Prevent clients from changing protected fields
+    function unchanged(field) {
+      return !(field in request.resource.data) || request.resource.data[field] == resource.data[field];
+    }
+
+    match /{document=**} { allow read, write: if false; }
+
+    // -----------------------
+    // PRIVATE PROFILE
+    // users/{uid}
+    // -----------------------
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+
+      // ✅ profile creation only by server (Cloud Functions / Admin)
+      allow create: if false;
+
+      // ✅ owner can update some profile fields, but not protected ones
+      allow update: if isOwner(uid)
+        && unchanged("uid")
+        && unchanged("publicUserId")
+        && unchanged("email")
+        && unchanged("provider")
+        && unchanged("emailVerified")
+        && unchanged("createdAt");
+
+      allow delete: if false;
+    }
+
+    // -----------------------
+    // PUBLIC PROFILE
+    // user/{publicId}
+    // -----------------------
+    match /user/{publicId} {
+      // ✅ public read for marketplace
+      allow read: if true;
+
+      // ✅ server-only writes
+      allow create, update, delete: if false;
+    }
+  }
+}

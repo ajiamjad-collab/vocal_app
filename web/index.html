@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8" />
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible" />
+  <meta name="description" content="A new Flutter project." />
+
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  <meta name="apple-mobile-web-app-title" content="vocal_app" />
+  <link rel="apple-touch-icon" href="icons/Icon-192.png" />
+
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <title>vocal_app</title>
+  <link rel="manifest" href="manifest.json" />
+
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #FFFFFF; /* match app background */
+    }
+
+    /* ✅ Minimal preloader shown BEFORE Flutter first frame */
+    #preloader {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      background: #FFFFFF; /* match app background */
+    }
+
+    #preloader img {
+      width: 140px;
+      height: auto;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- ✅ Shows instantly while Flutter loads -->
+  <div id="preloader" aria-hidden="true">
+    <img src="assets/logos/logo_black.png" alt="" />
+  </div>
+
+  <script>
+    // ✅ Remove preloader when Flutter draws the first frame
+    window.addEventListener('flutter-first-frame', function () {
+      var el = document.getElementById('preloader');
+      if (el) el.remove();
+    });
+  </script>
+
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

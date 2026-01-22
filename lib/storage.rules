@@ -1,0 +1,27 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    function isImage() {
+      return request.resource != null
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    function under5MB() {
+      return request.resource != null && request.resource.size < 5 * 1024 * 1024;
+    }
+
+    match /{allPaths=**} { allow read, write: if false; }
+
+    // profile_images/{uid}/{...}
+    match /profile_images/{uid}/{allPaths=**} {
+      allow read: if true; // change to signedIn() if private
+
+      // ✅ only owner + must be image + <5MB
+      allow write: if isOwner(uid) && isImage() && under5MB();
+    }
+  }
+}

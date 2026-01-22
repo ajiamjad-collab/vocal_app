@@ -1,0 +1,127 @@
+name: vocal_app
+description: "A new Flutter project."
+
+publish_to: 'none' 
+
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.4
+
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+   # Firebase
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  cloud_firestore: ^5.5.0
+  firebase_storage: ^12.3.0
+  cloud_functions: ^5.1.1
+
+
+  # Google Sign-In
+  google_sign_in: ^6.2.1
+
+  # BLoC
+  flutter_bloc: ^9.1.1
+  equatable: ^2.0.5
+
+  # Routing
+  go_router: ^14.6.2
+
+  # DI
+  get_it: ^8.0.3
+
+  # Local Storage (Remember Me)
+  shared_preferences: ^2.3.3
+
+  # Network (for future REST/Functions)
+  
+  connectivity_plus: ^6.0.5
+
+  # Utils
+  intl: ^0.19.0
+
+
+  cupertino_icons: ^1.0.8
+
+  url_launcher: ^6.3.0
+
+  # Splash
+  flutter_native_splash: ^2.4.7
+  
+  google_fonts: ^6.1.0
+  firebase_app_check: ^0.3.1+7
+
+  # Image
+  image_picker: ^1.2.1
+  image_cropper: ^11.0.0
+  flutter_image_compress: ^2.4.0
+  path: ^1.9.0
+  path_provider: ^2.1.4
+  mime: ^2.0.0
+
+
+  # For mobile video compression + thumbnail
+  video_compress: ^3.1.2
+
+  # Network images caching
+  cached_network_image: ^3.4.1
+ 
+  # Local DB cache (large data)
+  #isar: ^3.1.0+1
+  #isar_flutter_libs: ^3.1.0+1
+  isar_community: ^3.3.0
+  isar_community_flutter_libs: ^3.3.0
+  
+
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+   
+  flutter_lints: ^6.0.0
+  #isar_generator: ^3.1.0+1
+  isar_community_generator: ^3.3.0
+  build_runner: ^2.4.13
+  
+
+
+flutter_native_splash:
+  color: "#FFFFFF"
+  image: assets/logos/v-splash.png
+
+  android: true
+  ios: true
+  web: false
+
+  android_12:
+    color: "#FFFFFF"
+    image: assets/logos/v-splash.png
+    icon_background_color: "#FFFFFF"
+
+
+flutter:
+
+  
+  uses-material-design: true
+
+#--------------- LOCAL ASSETS ------------------#
+  assets:
+    - assets/logos/logo_black.png
+    - assets/logos/logo_white.png
+    - assets/logos/v-splash.png
+    - assets/logos/vlogo.png
+    - assets/icons/google-icon.png
+    
+
+  fonts:
+
+    - family: Pacifico
+      fonts:
+        - asset: assets/fonts/pacifico/Pacifico-Regular.ttf

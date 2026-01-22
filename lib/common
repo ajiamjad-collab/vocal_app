@@ -1,0 +1,237 @@
+/*   
+Command run for cache
+dart run build_runner build --delete-conflicting-outputs
+
+-------------------- ------------------------------------
+AppCachedImage(
+  url: post.imageUrl,
+  borderRadius: BorderRadius.circular(12),
+)
+
+--------------------------------------------------------
+
+
+
+This one is common repository functions
+
+
+F) Example: Professional repository using Cloud Functions + Isar + SWR
+
+Let’s say your function returns JSON like:
+
+{ "overview": {...}, "poster": [...], "products": [...] }
+
+lib/features/professional/data/professional_repository.dart
+import 'dart:convert';
+import '../../../core/cache/cache_store.dart';
+import '../../../core/network/network_info.dart';
+import '../../../core/repo/swr.dart';
+import '../../../core/repo/cache_keys.dart';
+import '../../../core/repo/ttl_policies.dart';
+import '../../../core/firebase/functions_client.dart';
+
+class ProfessionalOverview {
+  final String title;
+  final String bannerUrl;
+
+  const ProfessionalOverview({required this.title, required this.bannerUrl});
+
+  factory ProfessionalOverview.fromJson(Map<String, dynamic> j) {
+    return ProfessionalOverview(
+      title: (j['title'] ?? '') as String,
+      bannerUrl: (j['bannerUrl'] ?? '') as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'bannerUrl': bannerUrl,
+      };
+}
+
+abstract class ProfessionalRepository {
+  Stream<SwrEvent<ProfessionalOverview>> overviewSWR({required String uid});
+}
+
+class ProfessionalRepositoryImpl implements ProfessionalRepository {
+  final CacheStore cache;
+  final NetworkInfo net;
+  final FunctionsClient fns;
+
+  ProfessionalRepositoryImpl({
+    required this.cache,
+    required this.net,
+    required this.fns,
+  });
+
+  @override
+  Stream<SwrEvent<ProfessionalOverview>> overviewSWR({required String uid}) {
+    final key = CacheKeys.professionalOverview(uid);
+
+    return swrStream<ProfessionalOverview>(
+      cacheKey: key,
+      ttl: TtlPolicies.profile,
+      cache: cache,
+      net: net,
+      decode: (jsonStr) =>
+          ProfessionalOverview.fromJson(jsonDecode(jsonStr) as Map<String, dynamic>),
+      encode: (data) => jsonEncode(data.toJson()),
+      fetchRemote: () async {
+        // ✅ Cloud Function call (reduce Firestore reads inside client)
+        final Map<String, dynamic> data =
+            await fns.call<Map<String, dynamic>>('getProfessionalOverview', data: {'uid': uid});
+        return ProfessionalOverview.fromJson(data);
+      },
+    );
+  }
+}
+
+Register the repo in service locator:
+sl.registerLazySingleton<ProfessionalRepository>(
+  () => ProfessionalRepositoryImpl(
+    cache: sl<CacheStore>(),
+    net: sl<NetworkInfo>(),
+    fns: sl<FunctionsClient>(),
+  ),
+);
+
+G) BLoC/Cubit that works for all these repos
+lib/features/professional/presentation/cubit/professional_state.dart
+import 'package:equatable/equatable.dart';
+import '../../data/professional_repository.dart';
+
+class ProfessionalState extends Equatable {
+  final bool loading;
+  final ProfessionalOverview? overview;
+  final bool fromCache;
+  final DateTime? cacheSavedAt;
+  final String? error;
+
+  const ProfessionalState._({
+    required this.loading,
+    required this.overview,
+    required this.fromCache,
+    required this.cacheSavedAt,
+    required this.error,
+  });
+
+  const ProfessionalState.initial()
+      : this._(loading: false, overview: null, fromCache: false, cacheSavedAt: null, error: null);
+
+  const ProfessionalState.loading()
+      : this._(loading: true, overview: null, fromCache: false, cacheSavedAt: null, error: null);
+
+  const ProfessionalState.data({
+    required ProfessionalOverview overview,
+    required bool fromCache,
+    DateTime? cacheSavedAt,
+  }) : this._(
+          loading: false,
+          overview: overview,
+          fromCache: fromCache,
+          cacheSavedAt: cacheSavedAt,
+          error: null,
+        );
+
+  const ProfessionalState.error(String message)
+      : this._(loading: false, overview: null, fromCache: false, cacheSavedAt: null, error: message);
+
+  @override
+  List<Object?> get props => [loading, overview, fromCache, cacheSavedAt, error];
+}
+
+lib/features/professional/presentation/cubit/professional_cubit.dart
+import 'dart:async';
+import 'package:bloc/bloc.dart';
+import '../../../core/repo/swr.dart';
+import '../../data/professional_repository.dart';
+import 'professional_state.dart';
+
+class ProfessionalCubit extends Cubit<ProfessionalState> {
+  final ProfessionalRepository repo;
+  StreamSubscription? _sub;
+
+  ProfessionalCubit(this.repo) : super(const ProfessionalState.initial());
+
+  void load({required String uid}) {
+    emit(const ProfessionalState.loading());
+    _sub?.cancel();
+
+    _sub = repo.overviewSWR(uid: uid).listen((SwrEvent<ProfessionalOverview> e) {
+      emit(ProfessionalState.data(
+        overview: e.data,
+        fromCache: e.fromCache,
+        cacheSavedAt: e.cacheSavedAt,
+      ));
+    }, onError: (err) {
+      emit(ProfessionalState.error(err.toString()));
+    });
+  }
+
+  @override
+  Future<void> close() async {
+    await _sub?.cancel();
+    return super.close();
+  }
+}
+
+
+✅ Do the same pattern for personal / banners / posters / products—only the model + function name + cacheKey changes.
+
+
+-------------------------------------------------------------------------------
+
+
+3) Where to do “Don’t call getDownloadURL repeatedly” (using Functions)
+
+Since you’re using Cloud Functions, the best location to handle this is:
+
+✅ Option A (Best): Inside the Cloud Function that creates/updates the post/banner
+
+Flow:
+
+App uploads file (or app sends bytes/path)
+
+Function gets/generates downloadUrl once
+
+Function writes to Firestore: url + path + type
+
+App only reads Firestore later (no Storage lookups)
+
+✅ Option B: If app uploads directly to Storage
+
+Then do this in the same place you upload (your uploader service):
+
+after upload finishes → you already have downloadUrl
+
+immediately write Firestore doc with url and path
+
+Example (client side after upload)
+final result = await uploader.waitForResult(controller: controller);
+
+// ✅ Save once
+await firestore.collection('posts').doc(postId).set({
+  'media': [
+    {
+      'type': 'image',
+      'url': result.downloadUrl,
+      'path': result.path,
+    }
+  ],
+}, SetOptions(merge: true));
+
+What you should remove
+
+If you have any UI code like:
+
+final url = await FirebaseStorage.instance.ref(path).getDownloadURL();
+
+
+Remove it.
+
+Because you should already have:
+
+url stored in Firestore
+
+so feed just uses: doc['url']
+*/
