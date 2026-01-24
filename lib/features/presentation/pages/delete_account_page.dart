@@ -213,9 +213,9 @@ class _DeleteAccountPageState extends State<DeleteAccountPage> {
                                     width: double.infinity,
                                     padding: const EdgeInsets.all(10),
                                     decoration: BoxDecoration(
-                                      color: Colors.red.withOpacity(0.06),
+                                      color: Colors.red.withValues(alpha: 0.06),
                                       borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(color: Colors.red.withOpacity(0.25)),
+                                      border: Border.all(color: Colors.red.withValues(alpha: 0.25)),
                                     ),
                                     child: Row(
                                       crossAxisAlignment: CrossAxisAlignment.start,

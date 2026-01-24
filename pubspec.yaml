@@ -118,6 +118,9 @@ flutter:
     - assets/logos/v-splash.png
     - assets/logos/vlogo.png
     - assets/icons/google-icon.png
+
+
+    - assets/pincodes/pincode_in.json
     
 
   fonts:

@@ -17,22 +17,20 @@ class _AuthErrorListenerState extends State<AuthErrorListener> {
   bool _dialogOpen = false;
 
   Future<void> _showRetryDialog({
-    required BuildContext context,
     required String message,
+    required AuthBloc bloc, // ✅ pass bloc instead of using BuildContext after await
   }) async {
     if (_dialogOpen) return;
-
-    final nav = Navigator.maybeOf(context);
-    if (nav == null) return;
 
     _dialogOpen = true;
 
     try {
+      // If you keep this microtask gap, make sure we re-check mounted after it.
       await Future<void>.delayed(Duration.zero);
       if (!mounted) return;
 
       final retry = await showDialog<bool>(
-        context: context,
+        context: context, // ✅ use State.context (safe when guarded by mounted)
         barrierDismissible: true,
         builder: (ctx) => AlertDialog(
           title: const Text('Something went wrong'),
@@ -50,38 +48,41 @@ class _AuthErrorListenerState extends State<AuthErrorListener> {
         ),
       );
 
-      if (retry == true && mounted) {
-        context.read<AuthBloc>().add(const AuthRetryLastRequested());
+      if (!mounted) return;
+
+      if (retry == true) {
+        bloc.add(const AuthRetryLastRequested());
       }
     } finally {
       _dialogOpen = false;
     }
   }
 
-  void _showSnack(BuildContext context, String message) {
+  void _showSnack(String message) {
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) return;
 
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    messenger.showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
     return BlocListener<AuthBloc, AuthState>(
       listenWhen: (_, c) => c is AuthError,
-      listener: (context, state) {
+      listener: (ctx, state) {
         if (state is! AuthError) return;
 
         final message = state.exception.message;
         final retryable = state.exception.retryable;
 
+        // ✅ capture bloc now (no BuildContext usage after awaits)
+        final bloc = ctx.read<AuthBloc>();
+
         if (retryable) {
-          _showRetryDialog(context: context, message: message);
+          _showRetryDialog(message: message, bloc: bloc);
         } else {
-          _showSnack(context, message);
+          _showSnack(message);
         }
       },
       child: widget.child,

@@ -1,3 +1,5 @@
+import 'dart:io' show File;
+
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
@@ -43,5 +45,26 @@ class FirebaseMediaUploader {
     final snap = await controller.task;
     final url = await snap.ref.getDownloadURL();
     return UploadResult(path: snap.ref.fullPath, downloadUrl: url);
+  }
+
+  // ✅ ADDED: simple helper for File uploads (mobile)
+  Future<String> uploadFile({
+    required File file,
+    required String storagePath,
+    String? contentType,
+    String cacheControl = 'public,max-age=86400',
+  }) async {
+    if (kIsWeb) {
+      throw UnsupportedError('uploadFile() is not supported on web. Use upload(AppMedia) instead.');
+    }
+
+    final ref = storage.ref().child(storagePath);
+    final meta = SettableMetadata(
+      contentType: contentType ?? 'application/octet-stream',
+      cacheControl: cacheControl,
+    );
+
+    final snap = await ref.putFile(file, meta);
+    return snap.ref.getDownloadURL();
   }
 }

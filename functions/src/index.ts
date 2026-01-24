@@ -1,25 +1,23 @@
 import * as admin from "firebase-admin";
-import {onCall, onRequest, HttpsError, CallableRequest} from "firebase-functions/v2/https";
+import { onCall, HttpsError, CallableRequest } from "firebase-functions/v2/https";
 import * as functionsV1 from "firebase-functions/v1";
-import {getFirestore} from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
 import * as crypto from "crypto";
 
 admin.initializeApp();
 
-// ✅ Your Functions region (Mumbai)
+// ✅ Region
 const REGION = "asia-south1";
-
-// ✅ IMPORTANT (Enterprise multi-db): databaseId is "default"
+// ✅ Multi-db safe
 const DATABASE_ID = "default";
 
-// ✅ Lazy getters to avoid deploy-time initialization timeout
 function db() {
   return getFirestore(admin.app(), DATABASE_ID);
 }
 
-function bucket() {
+/*function bucket() {
   return admin.storage().bucket();
-}
+}*/
 
 // =============================
 // ✅ Enterprise auth helpers
@@ -30,32 +28,73 @@ function requireAuth(request: CallableRequest) {
   return uid;
 }
 
-function requireString(data: any, key: string, minLen = 1) {
+function requireString(data: any, key: string, minLen = 1, maxLen = 200) {
   const val = (data?.[key] ?? "").toString().trim();
   if (val.length < minLen) throw new HttpsError("invalid-argument", `${key} is required.`);
+  if (val.length > maxLen) throw new HttpsError("invalid-argument", `${key} too long.`);
   return val;
 }
 
-// ✅ 12 chars total: "U" + 11 random (A-Z0-9)
-// Uses cryptographically-strong randomness (NOT Math.random()).
-const PUBLIC_ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+function optionalString(data: any, key: string, maxLen = 5000) {
+  const v = (data?.[key] ?? "").toString().trim();
+  if (!v) return "";
+  if (v.length > maxLen) throw new HttpsError("invalid-argument", `${key} too long.`);
+  return v;
+}
 
-function randomAlphaNumCrypto(len: number): string {
-  const bytes = crypto.randomBytes(len);
-  let out = "";
-  for (let i = 0; i < len; i++) {
-    out += PUBLIC_ID_CHARS[bytes[i] % PUBLIC_ID_CHARS.length];
+function requireEnum<T extends string>(data: any, key: string, allowed: readonly T[]): T {
+  const v = (data?.[key] ?? "").toString().trim();
+  if (!allowed.includes(v as T)) {
+    throw new HttpsError("invalid-argument", `${key} must be one of: ${allowed.join(", ")}`);
+  }
+  return v as T;
+}
+
+function requireBool(data: any, key: string, fallback = false) {
+  const v = data?.[key];
+  if (typeof v === "boolean") return v;
+  return fallback;
+}
+
+function requireMap(data: any, key: string): Record<string, any> {
+  const v = data?.[key];
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  return v as Record<string, any>;
+}
+
+function optionalArrayOfStrings(data: any, key: string, maxItems = 50, maxLen = 120): string[] {
+  const arr = data?.[key];
+  if (!Array.isArray(arr)) return [];
+  const out: string[] = [];
+  for (const x of arr) {
+    const s = (x ?? "").toString().trim();
+    if (!s) continue;
+    if (s.length > maxLen) throw new HttpsError("invalid-argument", `${key} item too long.`);
+    out.push(s);
+    if (out.length >= maxItems) break;
   }
   return out;
 }
 
-// ✅ Candidate public id: U + 11 chars (total length = 12)
+// =============================
+// ✅ Crypto-safe random IDs
+// =============================
+const ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+function randomAlphaNumCrypto(len: number): string {
+  const bytes = crypto.randomBytes(len);
+  let out = "";
+  for (let i = 0; i < len; i++) out += ALNUM[bytes[i] % ALNUM.length];
+  return out;
+}
+
+// -----------------------------
+// ✅ User Public ID (U + 11)
+// -----------------------------
 function generatePublicUserIdCandidate(): string {
   return `U${randomAlphaNumCrypto(11)}`;
 }
 
-// ✅ Reserve a unique public id by creating user/{publicId} with a precondition.
-// If it already exists, Firestore will throw ALREADY_EXISTS and we retry.
 async function reserveUniquePublicUserIdTx(
   tx: FirebaseFirestore.Transaction,
   data: {
@@ -67,15 +106,11 @@ async function reserveUniquePublicUserIdTx(
 ): Promise<string> {
   const publicRefCol = db().collection("user");
 
-  // Try a handful of times inside a single transaction attempt.
-  // If we fail due to collision, we throw a controlled error and the outer retry loop will re-run.
   for (let i = 0; i < 25; i++) {
     const candidate = generatePublicUserIdCandidate();
     const publicRef = publicRefCol.doc(candidate);
 
-    // transaction.create() will fail if the document already exists.
     tx.create(publicRef, {
-      // ✅ Public-safe fields only. DO NOT store uid here.
       firstName: data.firstName,
       lastName: data.lastName,
       createdAt: data.createdAt,
@@ -88,49 +123,14 @@ async function reserveUniquePublicUserIdTx(
   throw new HttpsError("internal", "Failed to reserve a unique public user id. Please retry.");
 }
 
-type RecursiveDeleteFn = (ref: FirebaseFirestore.DocumentReference) => Promise<void>;
-type FirestoreWithRecursiveDelete = admin.firestore.Firestore & { recursiveDelete?: RecursiveDeleteFn };
-
-async function deleteUserDocRecursively(uid: string): Promise<void> {
-  const userRef = db().collection("users").doc(uid);
-
-  const dbAny = db() as unknown as FirestoreWithRecursiveDelete;
-  if (typeof dbAny.recursiveDelete === "function") {
-    await dbAny.recursiveDelete(userRef).catch(() => {});
-    return;
-  }
-
-  await userRef.delete().catch(() => {});
-}
-
-async function deletePublicUserDocByUid(uid: string): Promise<void> {
-  // If you no longer store uid in public docs, you can’t delete by uid without a private mapping.
-  // Safer approach: read user’s publicUserId from users/{uid} first, then delete user/{publicUserId}.
-  const userSnap = await db().collection("users").doc(uid).get().catch(() => null);
-  const publicUserId = userSnap?.exists ? (userSnap.data()?.publicUserId ?? "").toString().trim() : "";
-  if (!publicUserId) return;
-
-  await db().collection("user").doc(publicUserId).delete().catch(() => {});
-}
-
-async function deleteStorageFolderByPrefix(prefix: string): Promise<void> {
-  const [files] = await bucket().getFiles({prefix}).catch(() => [[]] as any);
-  if (!files?.length) return;
-
-  await Promise.allSettled(files.map((f: any) => f.delete().catch(() => {})));
-}
-
 // =====================================================
-// ✅ createUserProfile (v2) - server authoritative
-// - Creates/merges users/{uid} (private)
-// - Creates/reserves user/{publicId} (public)
-// - Collision + concurrency safe at massive scale
+// ✅ createUserProfile (v2)
 // =====================================================
-export const createUserProfile = onCall({region: REGION}, async (request) => {
+export const createUserProfile = onCall({ region: REGION }, async (request) => {
   const uid = requireAuth(request);
 
-  const firstName = requireString(request.data, "firstName", 1);
-  const lastName = requireString(request.data, "lastName", 1);
+  const firstName = requireString(request.data, "firstName", 1, 80);
+  const lastName = requireString(request.data, "lastName", 1, 80);
 
   const authUser = await admin.auth().getUser(uid);
   const email = authUser.email ?? "";
@@ -143,24 +143,13 @@ export const createUserProfile = onCall({region: REGION}, async (request) => {
   const existingData = existing?.exists ? (existing.data() || {}) : {};
 
   const now = admin.firestore.FieldValue.serverTimestamp();
-  const createdAt =
-    existing?.exists && existingData["createdAt"] ? existingData["createdAt"] : now;
+  const createdAt = existing?.exists && existingData["createdAt"] ? existingData["createdAt"] : now;
 
-  // If the user already has a publicUserId, keep it stable forever.
-  const existingPublicUserId = (existingData["publicUserId"] ?? "")
-    .toString()
-    .trim();
+  let publicUserId = (existingData["publicUserId"] ?? "").toString().trim();
 
-  // -----------------------------
-  // ✅ Transaction with safe ID reservation (no race condition)
-  // -----------------------------
-  let publicUserId = existingPublicUserId;
-
-  // We may need to retry if the reserved id collides (ALREADY_EXISTS).
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
       await db().runTransaction(async (tx) => {
-        // Reserve a new public id only when missing.
         if (!publicUserId) {
           publicUserId = await reserveUniquePublicUserIdTx(tx, {
             firstName,
@@ -169,21 +158,13 @@ export const createUserProfile = onCall({region: REGION}, async (request) => {
             updatedAt: now,
           });
         } else {
-          // Ensure the public doc exists (id already assigned).
-          // We use set({merge:true}) so we don't overwrite other public fields if you add them later.
           tx.set(
             db().collection("user").doc(publicUserId),
-            {
-              firstName,
-              lastName,
-              createdAt,
-              updatedAt: now,
-            },
-            {merge: true}
+            { firstName, lastName, createdAt, updatedAt: now },
+            { merge: true }
           );
         }
 
-        // Private profile (server-owned fields live here)
         tx.set(
           usersRef,
           {
@@ -197,112 +178,332 @@ export const createUserProfile = onCall({region: REGION}, async (request) => {
             createdAt,
             updatedAt: now,
           },
-          {merge: true}
+          { merge: true }
         );
       });
 
-      // ✅ success
       break;
     } catch (e: any) {
-      const msg = (e?.message ?? "").toString();
+      const msg = (e?.message ?? "").toString().toLowerCase();
       const code = (e?.code ?? "").toString();
 
-      // Collision on tx.create(publicDoc) -> retry.
-      if (
-        code === "already-exists" ||
-        msg.includes("ALREADY_EXISTS") ||
-        msg.toLowerCase().includes("already exists")
-      ) {
-        publicUserId = ""; // force new reservation next loop
+      if (code === "already-exists" || msg.includes("already exists") || msg.includes("already_exists")) {
+        publicUserId = "";
         continue;
       }
-
       throw e;
     }
   }
 
-  if (!publicUserId) {
-    throw new HttpsError("internal", "Could not allocate a public user id after retries.");
-  }
-
-  return {ok: true, publicUserId, emailVerified};
+  if (!publicUserId) throw new HttpsError("internal", "Could not allocate a public user id after retries.");
+  return { ok: true, publicUserId, emailVerified };
 });
 
-/**
- * ✅ syncEmailVerificationStatus (v2)
- * Client flow:
- * 1) user.reload() in Flutter
- * 2) call this function
- */
-export const syncEmailVerificationStatus = onCall({region: REGION}, async (request) => {
+export const syncEmailVerificationStatus = onCall({ region: REGION }, async (request) => {
   const uid = requireAuth(request);
-
   const authUser = await admin.auth().getUser(uid);
   const verified = authUser.emailVerified ?? false;
 
   await db().collection("users").doc(uid).set(
-    {
-      emailVerified: verified,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    {merge: true}
+    { emailVerified: verified, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
   );
-
-  return {ok: true, emailVerified: verified};
+  return { ok: true, emailVerified: verified };
 });
 
 // =====================================================
-// ✅ deleteMyAccount (v2)
-// Deletes:
-// - users/{uid} recursively
-// - user/{publicId} (by reading users/{uid}.publicUserId)
-// - profile_images/{uid}/...
+// ✅ BRANDS (Enterprise)
 // =====================================================
-export const deleteMyAccount = onCall({region: REGION}, async (request) => {
+
+// ✅ 12 chars total: "B" + 11 random (A-Z0-9)
+function generateBrandIdCandidate(): string {
+  return `B${randomAlphaNumCrypto(11)}`;
+}
+
+function buildSearchTokens(title: string): string[] {
+  const t = title.toLowerCase().trim().replace(/\s+/g, " ");
+  const words = t.split(" ").filter(Boolean);
+
+  const tokens = new Set<string>();
+  for (const w of words) {
+    const max = Math.min(20, w.length);
+    for (let i = 1; i <= max; i++) tokens.add(w.substring(0, i));
+  }
+  const maxFull = Math.min(25, t.length);
+  for (let i = 1; i <= maxFull; i++) tokens.add(t.substring(0, i));
+
+  return Array.from(tokens).slice(0, 80);
+}
+
+// ---- validators for old schema blocks ----
+function sanitizeUrlList(arr: any, max = 1): string[] {
+  if (!Array.isArray(arr)) return [];
+  const out: string[] = [];
+  for (const x of arr) {
+    const s = (x ?? "").toString().trim();
+    if (!s) continue;
+    if (s.length > 500) continue;
+    out.push(s);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function sanitizePhones(arr: any, max = 5): Array<{ countryCode: string; number: string }> {
+  if (!Array.isArray(arr)) return [];
+  const out: Array<{ countryCode: string; number: string }> = [];
+  for (const x of arr) {
+    if (!x || typeof x !== "object") continue;
+    const cc = (x["countryCode"] ?? "").toString().trim() || "+91";
+    const num = (x["number"] ?? "").toString().trim();
+    if (!num) continue;
+    if (num.length > 20) continue;
+    out.push({ countryCode: cc, number: num });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function clampInt(n: number, min: number, max: number): number {
+  if (Number.isNaN(n)) return min;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function sanitizeWorkingHours(map: any): Record<string, any> {
+  if (!map || typeof map !== "object" || Array.isArray(map)) return {};
+  const out: Record<string, any> = {};
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  for (const d of days) {
+    const v = map[d];
+    if (!v || typeof v !== "object") continue;
+    const isClosed = !!v["isClosed"];
+    const open = v["open"] ?? {};
+    const close = v["close"] ?? {};
+    const oh = Number(open["h"] ?? 9);
+    const om = Number(open["m"] ?? 0);
+    const ch = Number(close["h"] ?? 18);
+    const cm = Number(close["m"] ?? 0);
+    out[d] = {
+      isClosed,
+      open: { h: clampInt(oh, 0, 23), m: clampInt(om, 0, 59) },
+      close: { h: clampInt(ch, 0, 23), m: clampInt(cm, 0, 59) },
+    };
+  }
+  return out;
+}
+
+function sanitizeBranches(arr: any, max = 10): any[] {
+  if (!Array.isArray(arr)) return [];
+  const out: any[] = [];
+  for (const b of arr) {
+    if (!b || typeof b !== "object") continue;
+    const type = (b["type"] ?? "store").toString().trim() || "store";
+    const name = (b["name"] ?? "").toString().trim();
+    const address = (b["address"] ?? "").toString().trim();
+    const googleMapUrl = (b["googleMapUrl"] ?? "").toString().trim();
+    const phones = sanitizePhones(b["phones"], 3);
+    const loc = b["location"] ?? {};
+    const location = {
+      ...(typeof loc === "object" && !Array.isArray(loc) ? loc : {}),
+    };
+
+    for (const k of ["state", "district", "city", "pin", "digiPin"]) {
+      if (location[k] != null) location[k] = (location[k] ?? "").toString().trim();
+      if (!location[k]) delete location[k];
+    }
+
+    const clean: any = { type };
+    if (name) clean.name = name;
+    if (address) clean.address = address;
+    if (phones.length) clean.phones = phones;
+    if (googleMapUrl) clean.googleMapUrl = googleMapUrl;
+    if (Object.keys(location).length) clean.location = location;
+
+    out.push(clean);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+// ✅ createBrand (ONLY ONE EXPORT) - safe brandId capture
+export const createBrand = onCall({ region: REGION }, async (request) => {
   const uid = requireAuth(request);
 
-  // 1) delete storage images
-  await deleteStorageFolderByPrefix(`profile_images/${uid}/`).catch(() => {});
+  const title = requireString(request.data, "title", 2, 120);
+  const description = requireString(request.data, "description", 5, 5000);
+  const category = requireEnum(request.data, "category", ["personal", "professional"] as const);
+  const uiRefs = requireMap(request.data, "uiRefs");
 
-  // 2) delete public doc safely
-  await deletePublicUserDocByUid(uid).catch(() => {});
+  const contactsIn = requireMap(request.data, "contacts");
+  const socialIn = requireMap(request.data, "socialMedia");
+  const locationIn = requireMap(request.data, "location");
 
-  // 3) delete private doc recursively
-  await deleteUserDocRecursively(uid).catch(() => {});
+  const contacts = {
+    phones: sanitizePhones(contactsIn["phones"], 5),
+    whatsapps: sanitizePhones(contactsIn["whatsapps"], 5),
+    emails: optionalArrayOfStrings(contactsIn, "emails", 5, 120),
+    websites: sanitizeUrlList(contactsIn["websites"], 1),
+  };
 
-  // 4) finally delete auth user (optional: depends on your app flow)
-  await admin.auth().deleteUser(uid).catch(() => {});
+  const socialMedia = {
+    instagram: sanitizeUrlList(socialIn["instagram"], 1),
+    facebook: sanitizeUrlList(socialIn["facebook"], 1),
+    youtube: sanitizeUrlList(socialIn["youtube"], 1),
+    linkedin: sanitizeUrlList(socialIn["linkedin"], 1),
+  };
 
-  return {ok: true};
+  const location: any = {};
+  for (const k of ["state", "district", "city", "pin", "digiPin", "googleMapUrl", "mainType", "mainName"]) {
+    const v = (locationIn?.[k] ?? "").toString().trim();
+    if (v) location[k] = v;
+  }
+
+  const branches = sanitizeBranches(request.data?.["branches"], 10);
+  const showWorkingHours = requireBool(request.data, "showWorkingHours", true);
+  const workingHours = sanitizeWorkingHours(request.data?.["workingHours"]);
+
+  const tags = optionalArrayOfStrings(request.data, "tags", 50, 25);
+  const languagesKnown = optionalArrayOfStrings(request.data, "languagesKnown", 30, 40);
+  const categories = optionalArrayOfStrings(request.data, "categories", 20, 60);
+  const subCategories = optionalArrayOfStrings(request.data, "subCategories", 50, 60);
+
+  const businessType = optionalString(request.data, "businessType", 60);
+  const offeringsTypes = optionalArrayOfStrings(request.data, "offeringsTypes", 20, 30);
+  const serviceModes = optionalArrayOfStrings(request.data, "serviceModes", 30, 40);
+  const customerType = optionalString(request.data, "customerType", 20);
+
+  const companyType = optionalString(request.data, "companyType", 80);
+  const companyFounded = optionalString(request.data, "companyFounded", 10);
+  const gstNumber = optionalString(request.data, "gstNumber", 25);
+
+  const userSnap = await db().collection("users").doc(uid).get();
+  const publicUserId = (userSnap.data()?.publicUserId ?? "").toString().trim();
+  if (!publicUserId) {
+    throw new HttpsError("failed-precondition", "User profile not ready. Call createUserProfile first.");
+  }
+
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  let brandId = "";
+
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      await db().runTransaction(async (tx) => {
+        const candidate = generateBrandIdCandidate();
+        const brandRef = db().collection("brands").doc(candidate);
+
+        tx.create(brandRef, {
+          id: candidate,
+          title,
+          description,
+          category,
+
+          createdByUid: uid,
+          createdByPublicUserId: publicUserId,
+          uiRefs,
+
+          logoUrl: "",
+          coverUrl: "",
+
+          contacts,
+          socialMedia,
+          location: Object.keys(location).length ? location : null,
+          branches,
+          showWorkingHours,
+          workingHours,
+
+          tags,
+          languagesKnown,
+          categories,
+          subCategories,
+          businessType,
+          offeringsTypes,
+          serviceModes,
+          customerType,
+          companyType,
+          companyFounded,
+          gstNumber: gstNumber || null,
+
+          searchTokens: buildSearchTokens(title),
+
+          createdAt: now,
+          updatedAt: now,
+          visitsCount: 0,
+        });
+
+        brandId = candidate;
+      });
+
+      break;
+    } catch (e: any) {
+      const msg = (e?.message ?? "").toString().toLowerCase();
+      const code = (e?.code ?? "").toString();
+
+      if (code === "already-exists" || msg.includes("already exists") || msg.includes("already_exists")) {
+        continue;
+      }
+      throw e;
+    }
+  }
+
+  if (!brandId) throw new HttpsError("internal", "Could not allocate brand id after retries.");
+
+  return {
+    ok: true,
+    brandId,
+    upload: {
+      logoPath: `brand_images/${brandId}/logo.jpg`,
+      coverPath: `brand_images/${brandId}/cover.jpg`,
+    },
+  };
 });
 
-// ------------------------------------------------------------------
-// 🔒 Security: do NOT return verification links to the client.
-// Use Firebase client SDK: user.sendEmailVerification().
-// (Keeping this callable but disabling it to prevent abuse.)
-// ------------------------------------------------------------------
-export const createEmailVerificationLink = onCall({region: REGION}, async () => {
-  throw new HttpsError(
-    "failed-precondition",
-    "Disabled. Use FirebaseAuth.sendEmailVerification() from the client."
-  );
+// ✅ Update brand media URLs (server-authoritative write)
+export const setBrandMedia = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+
+  const brandId = requireString(request.data, "brandId", 3, 30);
+  const logoUrl = optionalString(request.data, "logoUrl", 500);
+  const coverUrl = optionalString(request.data, "coverUrl", 500);
+
+  const brandRef = db().collection("brands").doc(brandId);
+  const snap = await brandRef.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Brand not found.");
+
+  const createdByUid = (snap.data()?.createdByUid ?? "").toString();
+  if (createdByUid !== uid) throw new HttpsError("permission-denied", "Only brand owner can update media.");
+
+  const payload: any = {
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  if (logoUrl) payload.logoUrl = logoUrl;
+  if (coverUrl) payload.coverUrl = coverUrl;
+
+  await brandRef.set(payload, { merge: true });
+  return { ok: true };
 });
 
-// ------------------------------------------------------------------
-// 🔒 Security: do NOT generate / return password reset links to the client.
-// Use Firebase client SDK: FirebaseAuth.sendPasswordResetEmail().
-// ------------------------------------------------------------------
-export const createPasswordResetLink = onCall({region: REGION}, async () => {
-  throw new HttpsError(
-    "failed-precondition",
-    "Disabled. Use FirebaseAuth.sendPasswordResetEmail() from the client."
-  );
+// ✅ Visits (atomic increment) — baseline
+export const incrementBrandVisit = onCall({ region: REGION }, async (request) => {
+  const brandId = requireString(request.data, "brandId", 3, 30);
+
+  await db()
+    .collection("brands")
+    .doc(brandId)
+    .set(
+      {
+        visitsCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+  return { ok: true };
 });
 
 // =====================================================
-// Legacy v1 HTTP function example (if you have any)
+// Legacy v1 HTTP function (optional health check)
 // =====================================================
-// Example placeholder to match your existing imports:
 export const health = functionsV1.region(REGION).https.onRequest((req, res) => {
   res.status(200).send("ok");
 });

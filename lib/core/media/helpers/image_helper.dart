@@ -1,9 +1,11 @@
 import 'dart:io' show File;
+
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_cropper/image_cropper.dart';
+
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -22,13 +24,9 @@ class ImageValidationException implements Exception {
 class ImageHelper {
   ImageHelper._();
 
-  // Accept "almost all" images.
-  // (If you want stricter control, restrict this.)
   static bool _isAllowedImageMime(String? mime) {
     if (mime == null) return false;
     if (mime.startsWith('image/')) return true;
-
-    // some pickers return odd values; keep small allowlist
     return mime == 'application/octet-stream';
   }
 
@@ -48,7 +46,9 @@ class ImageHelper {
 
     final mime = lookupMimeType(media.name, headerBytes: bytes);
     if (!_isAllowedImageMime(mime)) {
-      throw ImageValidationException('Unsupported image type: ${mime ?? "unknown"}');
+      throw ImageValidationException(
+        'Unsupported image type: ${mime ?? "unknown"}',
+      );
     }
   }
 
@@ -65,7 +65,6 @@ class ImageHelper {
       final ctx = getContext();
       if (ctx == null) return null;
 
-      // Cropper needs a file path; on web cropper uses WebUiSettings context.
       final CroppedFile? cropped = await ImageCropper().cropImage(
         sourcePath: media.xfile.path,
         compressQuality: 100,
@@ -119,7 +118,6 @@ class ImageHelper {
           ? rules.maxHeightWifi
           : (mobile ? rules.maxHeightMobile : rules.maxHeightOffline);
 
-      // ✅ Normalize output to JPEG so you always "support" display/decode consistently.
       if (kIsWeb) {
         final bytes = await media.readBytes();
         final out = await FlutterImageCompress.compressWithList(
@@ -131,14 +129,17 @@ class ImageHelper {
           format: CompressFormat.jpeg,
         );
 
-        final x = XFile.fromData(out, name: _toJpg(media.name), mimeType: 'image/jpeg');
+        final x = XFile.fromData(
+          out,
+          name: _toJpg(media.name),
+          mimeType: 'image/jpeg',
+        );
         return AppMedia(kind: MediaKind.image, xfile: x, bytes: out);
       }
 
       File file = File(media.xfile.path);
       final kb = (await file.length() / 1024).round();
 
-      // resize pass if huge
       if (kb > rules.resizeThresholdKb) {
         final resized = await _compressFileToTemp(
           file,
@@ -160,7 +161,11 @@ class ImageHelper {
 
       if (compressed == null) return media;
 
-      final x = XFile(compressed.path, name: p.basename(compressed.path), mimeType: 'image/jpeg');
+      final x = XFile(
+        compressed.path,
+        name: p.basename(compressed.path),
+        mimeType: 'image/jpeg',
+      );
       return AppMedia(kind: MediaKind.image, xfile: x);
     } catch (_) {
       return media;
@@ -249,7 +254,8 @@ class ImageHelper {
     required bool keepExif,
   }) async {
     final dir = await getTemporaryDirectory();
-    final target = p.join(dir.path, '${DateTime.now().microsecondsSinceEpoch}.jpg');
+    final target =
+        p.join(dir.path, '${DateTime.now().microsecondsSinceEpoch}.jpg');
 
     final out = await FlutterImageCompress.compressAndGetFile(
       file.path,
@@ -281,6 +287,27 @@ class ImageHelper {
         return 'Crop Banner';
       case ImageUseCase.gallery:
         return 'Crop';
+    }
+  }
+
+  static Future<File?> pickImage({
+    required bool fromCamera,
+    ImageUseCase useCase = ImageUseCase.logo,
+    BuildContext? Function()? getContext,
+  }) async {
+    final media = await pickProcessSingle(
+      getContext: getContext ?? () => null,
+      useCase: useCase,
+      fromCamera: fromCamera,
+    );
+
+    if (media == null) return null;
+    if (kIsWeb) return null;
+
+    try {
+      return File(media.xfile.path);
+    } catch (_) {
+      return null;
     }
   }
 }

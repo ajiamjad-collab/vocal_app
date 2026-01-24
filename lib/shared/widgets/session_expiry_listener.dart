@@ -15,11 +15,8 @@ class SessionExpiryListener extends StatefulWidget {
 class _SessionExpiryListenerState extends State<SessionExpiryListener> {
   bool _dialogOpen = false;
 
-  Future<void> _showSessionExpiredDialog(BuildContext context) async {
+  Future<void> _showSessionExpiredDialog() async {
     if (_dialogOpen) return;
-
-    final nav = Navigator.maybeOf(context);
-    if (nav == null) return;
 
     _dialogOpen = true;
 
@@ -28,7 +25,7 @@ class _SessionExpiryListenerState extends State<SessionExpiryListener> {
       if (!mounted) return;
 
       await showDialog<void>(
-        context: context,
+        context: context, // ✅ State.context (safe because we checked mounted)
         barrierDismissible: true,
         builder: (ctx) => AlertDialog(
           title: const Text("Session expired"),
@@ -51,8 +48,8 @@ class _SessionExpiryListenerState extends State<SessionExpiryListener> {
     return BlocListener<AuthBloc, AuthState>(
       listenWhen: (prev, curr) =>
           curr is Unauthenticated && prev is! Unauthenticated,
-      listener: (context, state) {
-        _showSessionExpiredDialog(context);
+      listener: (_, _) {
+        _showSessionExpiredDialog();
       },
       child: widget.child,
     );

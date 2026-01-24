@@ -51,6 +51,23 @@ import 'package:vocal_app/features/profile/domain/repositories/user_profile_repo
 import 'package:vocal_app/features/profile/domain/repositories/user_profile_repository_impl.dart';
 import 'package:vocal_app/features/profile/domain/usecases/create_user_profile.dart';
 
+import 'package:vocal_app/features/brands/data/datasources/brand_remote_ds.dart';
+import 'package:vocal_app/features/brands/data/repositories/brand_repository_impl.dart';
+import 'package:vocal_app/features/brands/domain/repositories/brand_repository.dart';
+
+import 'package:firebase_storage/firebase_storage.dart';
+
+// Brands
+
+import 'package:vocal_app/features/brands/domain/usecases/create_brand.dart';
+import 'package:vocal_app/features/brands/domain/usecases/get_brands_page.dart';
+import 'package:vocal_app/features/brands/domain/usecases/watch_brand.dart';
+import 'package:vocal_app/features/brands/domain/usecases/increment_brand_visit.dart';
+import 'package:vocal_app/features/brands/presentation/bloc/brands_bloc.dart';
+import 'package:vocal_app/features/brands/presentation/bloc/brand_create_cubit.dart';
+import 'package:vocal_app/features/brands/presentation/bloc/brand_detail_cubit.dart';
+
+
 const String? kWebClientId = null;
 
 const String kFunctionsRegion = 'asia-south1';
@@ -143,6 +160,36 @@ Future<void> setupServiceLocator() async {
   sl.registerLazySingleton<UserProfileRepository>(
     () => UserProfileRepositoryImpl(remote: sl<UserProfileRemoteDataSource>()),
   );
+
+
+    // Firebase Storage
+  sl.registerLazySingleton<FirebaseStorage>(() => FirebaseStorage.instance);
+
+  // -----------------------
+  // Brands
+  // -----------------------
+  sl.registerLazySingleton<BrandRemoteDataSource>(() => BrandRemoteDataSourceImpl(
+        firestore: sl<FirebaseFirestore>(),
+        functions: sl<FunctionsClient>(),
+        storage: sl<FirebaseStorage>(),
+        auth: sl<FirebaseAuth>(),
+      ));
+
+  sl.registerLazySingleton<BrandRepository>(() => BrandRepositoryImpl(remote: sl<BrandRemoteDataSource>()));
+
+  
+  sl.registerLazySingleton(() => GetBrandsPage(sl<BrandRepository>()));
+  sl.registerLazySingleton(() => WatchBrand(sl<BrandRepository>()));
+  sl.registerLazySingleton(() => CreateBrand(sl<BrandRepository>()));
+  sl.registerLazySingleton(() => IncrementBrandVisit(sl<BrandRepository>()));
+
+  sl.registerFactory(() => BrandsBloc(getBrandsPage: sl<GetBrandsPage>()));
+  sl.registerFactory(() => BrandCreateCubit(createBrand: sl<CreateBrand>()));
+  sl.registerFactory(() => BrandDetailCubit(
+        watchBrand: sl<WatchBrand>(),
+        incrementBrandVisit: sl<IncrementBrandVisit>(),
+      ));
+
 
   // Usecases
   sl.registerLazySingleton(() => SignInEmail(sl<AuthRepository>()));

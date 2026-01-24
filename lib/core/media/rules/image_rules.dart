@@ -7,10 +7,7 @@ class ImageRules {
   final bool enableCrop;
   final CropAspectRatio? aspectRatio;
 
-  /// Hard size limit (prevents huge uploads)
   final int maxBytes;
-
-  /// If above this KB, do an extra resize pass before final compress
   final int resizeThresholdKb;
 
   final int qualityWifi;
@@ -52,7 +49,7 @@ class ImageUseCaseRules {
           allowMultiple: false,
           enableCrop: true,
           aspectRatio: CropAspectRatio(ratioX: 1, ratioY: 1),
-          maxBytes: 6 * 1024 * 1024, // allow more input formats, compress later
+          maxBytes: 6 * 1024 * 1024,
           resizeThresholdKb: 700,
           qualityWifi: 85,
           qualityMobile: 75,
