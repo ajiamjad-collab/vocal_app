@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:vocal_app/features/brands/presentation/bloc/pages/tabs/brand_tab_page.dart';
+import 'package:vocal_app/features/profile/presentation/profile_tab_page.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../bloc/home_menu_cubit.dart';
 
@@ -8,7 +9,7 @@ import '../bloc/home_menu_cubit.dart';
 import 'tabs/home_tab_page.dart';
 //import 'tabs/brand_page.dart';
 import 'tabs/star_tab_page.dart';
-import 'tabs/profile_tab_page.dart';
+//import 'tabs/profile_tab_page.dart';
 import 'tabs/add_tab_page.dart';
 
 /*class HomeMenuPage extends StatefulWidget {

@@ -1,8 +1,8 @@
 import * as admin from "firebase-admin";
-import { onCall, HttpsError, CallableRequest } from "firebase-functions/v2/https";
-import * as functionsV1 from "firebase-functions/v1";
-import { getFirestore } from "firebase-admin/firestore";
+import {onCall, HttpsError, CallableRequest, onRequest} from "firebase-functions/v2/https";
+import {getFirestore} from "firebase-admin/firestore";
 import * as crypto from "crypto";
+import type {Request, Response} from "express";
 
 admin.initializeApp();
 
@@ -11,11 +11,14 @@ const REGION = "asia-south1";
 // ✅ Multi-db safe
 const DATABASE_ID = "default";
 
+// ✅ CHANGED: public profile collection name
+const PUBLIC_PROFILE_COLLECTION = "Personal";
+
 function db() {
   return getFirestore(admin.app(), DATABASE_ID);
 }
 
-/*function bucket() {
+/* function bucket() {
   return admin.storage().bucket();
 }*/
 
@@ -104,15 +107,20 @@ async function reserveUniquePublicUserIdTx(
     updatedAt: FirebaseFirestore.FieldValue | FirebaseFirestore.Timestamp;
   }
 ): Promise<string> {
-  const publicRefCol = db().collection("user");
+  // ✅ CHANGED
+  const col = db().collection(PUBLIC_PROFILE_COLLECTION);
 
   for (let i = 0; i < 25; i++) {
     const candidate = generatePublicUserIdCandidate();
-    const publicRef = publicRefCol.doc(candidate);
+    const ref = col.doc(candidate);
 
-    tx.create(publicRef, {
+    const snap = await tx.get(ref);
+    if (snap.exists) continue;
+
+    tx.create(ref, {
       firstName: data.firstName,
       lastName: data.lastName,
+      photoUrl: "",
       createdAt: data.createdAt,
       updatedAt: data.updatedAt,
     });
@@ -126,7 +134,7 @@ async function reserveUniquePublicUserIdTx(
 // =====================================================
 // ✅ createUserProfile (v2)
 // =====================================================
-export const createUserProfile = onCall({ region: REGION }, async (request) => {
+export const createUserProfile = onCall({region: REGION}, async (request) => {
   const uid = requireAuth(request);
 
   const firstName = requireString(request.data, "firstName", 1, 80);
@@ -137,7 +145,7 @@ export const createUserProfile = onCall({ region: REGION }, async (request) => {
   const provider = authUser.providerData?.[0]?.providerId ?? "unknown";
   const emailVerified = authUser.emailVerified ?? false;
 
-  const usersRef = db().collection("users").doc(uid);
+  const usersRef = db().collection("Users").doc(uid);
 
   const existing = await usersRef.get().catch(() => null);
   const existingData = existing?.exists ? (existing.data() || {}) : {};
@@ -159,9 +167,15 @@ export const createUserProfile = onCall({ region: REGION }, async (request) => {
           });
         } else {
           tx.set(
-            db().collection("user").doc(publicUserId),
-            { firstName, lastName, createdAt, updatedAt: now },
-            { merge: true }
+            // ✅ CHANGED
+            db().collection(PUBLIC_PROFILE_COLLECTION).doc(publicUserId),
+            {
+              firstName,
+              lastName,
+              createdAt,
+              updatedAt: now,
+            },
+            {merge: true}
           );
         }
 
@@ -178,7 +192,7 @@ export const createUserProfile = onCall({ region: REGION }, async (request) => {
             createdAt,
             updatedAt: now,
           },
-          { merge: true }
+          {merge: true}
         );
       });
 
@@ -196,20 +210,123 @@ export const createUserProfile = onCall({ region: REGION }, async (request) => {
   }
 
   if (!publicUserId) throw new HttpsError("internal", "Could not allocate a public user id after retries.");
-  return { ok: true, publicUserId, emailVerified };
+  return {ok: true, publicUserId, emailVerified};
 });
 
-export const syncEmailVerificationStatus = onCall({ region: REGION }, async (request) => {
+export const syncEmailVerificationStatus = onCall({region: REGION}, async (request) => {
   const uid = requireAuth(request);
   const authUser = await admin.auth().getUser(uid);
   const verified = authUser.emailVerified ?? false;
 
-  await db().collection("users").doc(uid).set(
-    { emailVerified: verified, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-    { merge: true }
+  await db().collection("Users").doc(uid).set(
+    {emailVerified: verified, updatedAt: admin.firestore.FieldValue.serverTimestamp()},
+    {merge: true}
   );
-  return { ok: true, emailVerified: verified };
+  return {ok: true, emailVerified: verified};
 });
+
+// =====================================================
+// ✅ PROFILE: getMyProfile
+// Reads name/photo from public: Personal/{publicUserId}
+// =====================================================
+export const getMyProfile = onCall({region: REGION}, async (request) => {
+  const uid = requireAuth(request);
+
+  const privateSnap = await db().collection("Users").doc(uid).get();
+  if (!privateSnap.exists) throw new HttpsError("not-found", "Private profile not found.");
+
+  const publicUserId = (privateSnap.data()?.publicUserId ?? "").toString().trim();
+  if (!publicUserId) throw new HttpsError("failed-precondition", "publicUserId not ready. Call createUserProfile first.");
+
+  // ✅ CHANGED
+  const publicSnap = await db().collection(PUBLIC_PROFILE_COLLECTION).doc(publicUserId).get();
+  const pub = publicSnap.exists ? (publicSnap.data() || {}) : {};
+
+  return {
+    ok: true,
+    publicUserId,
+    firstName: (pub["firstName"] ?? "").toString(),
+    lastName: (pub["lastName"] ?? "").toString(),
+    photoUrl: (pub["photoUrl"] ?? "").toString(),
+  };
+});
+
+// =====================================================
+// ✅ PROFILE: updateMyName
+// Updates BOTH:
+// - public Personal/{publicId}
+// - private Users/{uid}
+// =====================================================
+export const updateMyName = onCall({region: REGION}, async (request) => {
+  const uid = requireAuth(request);
+
+  const firstName = requireString(request.data, "firstName", 1, 80);
+  const lastName = requireString(request.data, "lastName", 1, 80);
+
+  const usersRef = db().collection("Users").doc(uid);
+  const usersSnap = await usersRef.get();
+  if (!usersSnap.exists) throw new HttpsError("not-found", "Private profile not found.");
+
+  const publicUserId = (usersSnap.data()?.publicUserId ?? "").toString().trim();
+  if (!publicUserId) throw new HttpsError("failed-precondition", "publicUserId not ready.");
+
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  await db().runTransaction(async (tx) => {
+    tx.set(
+      // ✅ CHANGED
+      db().collection(PUBLIC_PROFILE_COLLECTION).doc(publicUserId),
+      {firstName, lastName, updatedAt: now},
+      {merge: true}
+    );
+
+    tx.set(
+      usersRef,
+      {firstName, lastName, updatedAt: now},
+      {merge: true}
+    );
+  });
+
+  return {ok: true};
+});
+
+// =====================================================
+// ✅ PROFILE: setMyProfilePhotoUrl
+// photoUrl stored ONLY in public Personal/{publicId}
+// =====================================================
+export const setMyProfilePhotoUrl = onCall({region: REGION}, async (request) => {
+  const uid = requireAuth(request);
+
+  const photoUrl = requireString(request.data, "photoUrl", 5, 800);
+
+  const usersRef = db().collection("Users").doc(uid);
+  const privateSnap = await usersRef.get();
+  if (!privateSnap.exists) throw new HttpsError("not-found", "Private profile not found.");
+
+  const publicUserId = (privateSnap.data()?.publicUserId ?? "").toString().trim();
+  if (!publicUserId) throw new HttpsError("failed-precondition", "publicUserId not ready.");
+
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  await db().runTransaction(async (tx) => {
+    // ✅ public doc: Personal/{publicUserId}
+    tx.set(
+      db().collection(PUBLIC_PROFILE_COLLECTION).doc(publicUserId),
+      {photoUrl, updatedAt: now},
+      {merge: true}
+    );
+
+    // ✅ private doc: Users/{uid}
+    tx.set(
+      usersRef,
+      {photoUrl, updatedAt: now},
+      {merge: true}
+    );
+  });
+
+  return {ok: true};
+});
+
 
 // =====================================================
 // ✅ BRANDS (Enterprise)
@@ -258,7 +375,7 @@ function sanitizePhones(arr: any, max = 5): Array<{ countryCode: string; number:
     const num = (x["number"] ?? "").toString().trim();
     if (!num) continue;
     if (num.length > 20) continue;
-    out.push({ countryCode: cc, number: num });
+    out.push({countryCode: cc, number: num});
     if (out.length >= max) break;
   }
   return out;
@@ -285,8 +402,8 @@ function sanitizeWorkingHours(map: any): Record<string, any> {
     const cm = Number(close["m"] ?? 0);
     out[d] = {
       isClosed,
-      open: { h: clampInt(oh, 0, 23), m: clampInt(om, 0, 59) },
-      close: { h: clampInt(ch, 0, 23), m: clampInt(cm, 0, 59) },
+      open: {h: clampInt(oh, 0, 23), m: clampInt(om, 0, 59)},
+      close: {h: clampInt(ch, 0, 23), m: clampInt(cm, 0, 59)},
     };
   }
   return out;
@@ -312,7 +429,7 @@ function sanitizeBranches(arr: any, max = 10): any[] {
       if (!location[k]) delete location[k];
     }
 
-    const clean: any = { type };
+    const clean: any = {type};
     if (name) clean.name = name;
     if (address) clean.address = address;
     if (phones.length) clean.phones = phones;
@@ -326,7 +443,7 @@ function sanitizeBranches(arr: any, max = 10): any[] {
 }
 
 // ✅ createBrand (ONLY ONE EXPORT) - safe brandId capture
-export const createBrand = onCall({ region: REGION }, async (request) => {
+export const createBrand = onCall({region: REGION}, async (request) => {
   const uid = requireAuth(request);
 
   const title = requireString(request.data, "title", 2, 120);
@@ -376,7 +493,7 @@ export const createBrand = onCall({ region: REGION }, async (request) => {
   const companyFounded = optionalString(request.data, "companyFounded", 10);
   const gstNumber = optionalString(request.data, "gstNumber", 25);
 
-  const userSnap = await db().collection("users").doc(uid).get();
+  const userSnap = await db().collection("Users").doc(uid).get();
   const publicUserId = (userSnap.data()?.publicUserId ?? "").toString().trim();
   if (!publicUserId) {
     throw new HttpsError("failed-precondition", "User profile not ready. Call createUserProfile first.");
@@ -459,7 +576,7 @@ export const createBrand = onCall({ region: REGION }, async (request) => {
 });
 
 // ✅ Update brand media URLs (server-authoritative write)
-export const setBrandMedia = onCall({ region: REGION }, async (request) => {
+export const setBrandMedia = onCall({region: REGION}, async (request) => {
   const uid = requireAuth(request);
 
   const brandId = requireString(request.data, "brandId", 3, 30);
@@ -479,12 +596,12 @@ export const setBrandMedia = onCall({ region: REGION }, async (request) => {
   if (logoUrl) payload.logoUrl = logoUrl;
   if (coverUrl) payload.coverUrl = coverUrl;
 
-  await brandRef.set(payload, { merge: true });
-  return { ok: true };
+  await brandRef.set(payload, {merge: true});
+  return {ok: true};
 });
 
 // ✅ Visits (atomic increment) — baseline
-export const incrementBrandVisit = onCall({ region: REGION }, async (request) => {
+export const incrementBrandVisit = onCall({region: REGION}, async (request) => {
   const brandId = requireString(request.data, "brandId", 3, 30);
 
   await db()
@@ -495,15 +612,15 @@ export const incrementBrandVisit = onCall({ region: REGION }, async (request) =>
         visitsCount: admin.firestore.FieldValue.increment(1),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
-      { merge: true }
+      {merge: true}
     );
 
-  return { ok: true };
+  return {ok: true};
 });
 
 // =====================================================
 // Legacy v1 HTTP function (optional health check)
 // =====================================================
-export const health = functionsV1.region(REGION).https.onRequest((req, res) => {
+export const health = onRequest({region: REGION}, (req: Request, res: Response) => {
   res.status(200).send("ok");
 });

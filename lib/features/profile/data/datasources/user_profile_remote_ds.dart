@@ -1,6 +1,24 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+
+class PublicUserProfile {
+  final String publicUserId;
+  final String firstName;
+  final String lastName;
+  final String photoUrl;
+
+  const PublicUserProfile({
+    required this.publicUserId,
+    required this.firstName,
+    required this.lastName,
+    required this.photoUrl,
+  });
+
+  String get fullName => '${firstName.trim()} ${lastName.trim()}'.trim();
+}
 
 abstract class UserProfileRemoteDataSource {
   Future<String> createUserProfile({
@@ -12,6 +30,10 @@ abstract class UserProfileRemoteDataSource {
     required String fallbackFirstName,
     required String fallbackLastName,
   });
+
+  Stream<PublicUserProfile> watchMyPublicProfile();
+  Future<void> updateMyName({required String firstName, required String lastName});
+  Future<void> setMyProfilePhotoUrl({required String photoUrl});
 }
 
 class UserProfileRemoteDataSourceImpl implements UserProfileRemoteDataSource {
@@ -19,16 +41,14 @@ class UserProfileRemoteDataSourceImpl implements UserProfileRemoteDataSource {
   final FirebaseFirestore firestore;
   final FirebaseAuth auth;
 
+  static const String publicProfileCollection = "Personal";
+
   UserProfileRemoteDataSourceImpl({
     required this.functions,
     required this.firestore,
     required this.auth,
   });
 
-  /// ✅ Ensures profile exists (server authoritative)
-  /// - Creates users/{uid} + user/{publicUserId} using Cloud Function
-  /// - Verifies users/{uid} exists afterwards
-  /// - No client-side fallback (Firestore rules block it by design)
   @override
   Future<String> createUserProfile({
     required String firstName,
@@ -37,7 +57,6 @@ class UserProfileRemoteDataSourceImpl implements UserProfileRemoteDataSource {
     final u = auth.currentUser;
     if (u == null) throw Exception('No authenticated user.');
 
-    // 1) Call Cloud Function (server-side create)
     final callable = functions.httpsCallable('createUserProfile');
 
     final res = await callable.call(<String, dynamic>{
@@ -53,8 +72,7 @@ class UserProfileRemoteDataSourceImpl implements UserProfileRemoteDataSource {
       throw Exception('Profile created but publicUserId missing.');
     }
 
-    // 2) Verify users/{uid} exists (helps detect deployment/region misconfig)
-    final userRef = firestore.collection('users').doc(u.uid);
+    final userRef = firestore.collection('Users').doc(u.uid);
     final snap = await userRef.get();
     if (!snap.exists) {
       throw Exception('Profile creation did not complete. Please retry.');
@@ -71,7 +89,7 @@ class UserProfileRemoteDataSourceImpl implements UserProfileRemoteDataSource {
     final u = auth.currentUser;
     if (u == null) return;
 
-    final docRef = firestore.collection('users').doc(u.uid);
+    final docRef = firestore.collection('Users').doc(u.uid);
     final snap = await docRef.get();
 
     if (!snap.exists) {
@@ -80,5 +98,49 @@ class UserProfileRemoteDataSourceImpl implements UserProfileRemoteDataSource {
         lastName: fallbackLastName,
       );
     }
+  }
+
+  @override
+  Stream<PublicUserProfile> watchMyPublicProfile() async* {
+    final uid = auth.currentUser?.uid;
+    if (uid == null) throw Exception("Not signed in");
+
+    final usersDocStream = firestore.collection("Users").doc(uid).snapshots();
+
+    await for (final usersSnap in usersDocStream) {
+      final data = usersSnap.data() ?? {};
+      final publicUserId = (data["publicUserId"] ?? "").toString().trim();
+      if (publicUserId.isEmpty) continue;
+
+      final publicStream =
+          firestore.collection(publicProfileCollection).doc(publicUserId).snapshots();
+
+      await for (final pubSnap in publicStream) {
+        final pub = pubSnap.data() ?? {};
+        yield PublicUserProfile(
+          publicUserId: publicUserId,
+          firstName: (pub["firstName"] ?? "").toString(),
+          lastName: (pub["lastName"] ?? "").toString(),
+          photoUrl: (pub["photoUrl"] ?? "").toString(),
+        );
+      }
+    }
+  }
+
+  @override
+  Future<void> updateMyName({required String firstName, required String lastName}) async {
+    final callable = functions.httpsCallable("updateMyName");
+    await callable.call({
+      "firstName": firstName.trim(),
+      "lastName": lastName.trim(),
+    });
+  }
+
+  @override
+  Future<void> setMyProfilePhotoUrl({required String photoUrl}) async {
+    final callable = functions.httpsCallable("setMyProfilePhotoUrl");
+    await callable.call({
+      "photoUrl": photoUrl.trim(),
+    });
   }
 }

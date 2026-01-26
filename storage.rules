@@ -25,3 +25,83 @@ service firebase.storage {
     }
   }
 }
+
+
+
+
+
+
+
+
+
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isImage() {
+      return request.resource != null
+        && request.resource.contentType != null
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    function under5MB() {
+      return request.resource != null
+        && request.resource.size <= 5 * 1024 * 1024;
+    }
+
+    function isProfileFile(fileName) {
+      return fileName == "profile.jpg"
+          || fileName == "profile.jpeg"
+          || fileName == "profile.png";
+    }
+
+    // ✅ compare folder publicId with users/{uid}.publicUserId
+    function myPublicIdMatches(publicId) {
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/Users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/Users/$(request.auth.uid)).data.publicUserId == publicId;
+    }
+
+    // deny all by default
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // ✅ PUBLIC profile image path: Personal/{publicUserId}/Profile/profile.jpg
+		match /Personal/{publicId}/Profile/{fileName} {
+  		allow read: if true;
+
+  		allow write: if signedIn()
+    		&& isProfileFile(fileName)
+    		&& isImage()
+    		&& under5MB()
+    		&& myPublicIdMatches(publicId);
+		}
+
+
+    // optional uid-based folder
+    match /profile_images/{uid}/{allPaths=**} {
+      allow read: if true;
+      allow write: if signedIn()
+        && request.auth.uid == uid
+        && isImage()
+        && under5MB();
+    }
+
+    // brand images
+    match /brand_images/{brandId}/{allPaths=**} {
+      allow read: if true;
+
+      allow write: if signedIn()
+        && isImage()
+        && under5MB()
+        && firestore.exists(/databases/(default)/documents/brands/$(brandId))
+        && request.auth.uid ==
+           firestore.get(/databases/(default)/documents/brands/$(brandId)).data.createdByUid;
+    }
+  }
+}

@@ -58,7 +58,6 @@ import 'package:vocal_app/features/brands/domain/repositories/brand_repository.d
 import 'package:firebase_storage/firebase_storage.dart';
 
 // Brands
-
 import 'package:vocal_app/features/brands/domain/usecases/create_brand.dart';
 import 'package:vocal_app/features/brands/domain/usecases/get_brands_page.dart';
 import 'package:vocal_app/features/brands/domain/usecases/watch_brand.dart';
@@ -66,7 +65,6 @@ import 'package:vocal_app/features/brands/domain/usecases/increment_brand_visit.
 import 'package:vocal_app/features/brands/presentation/bloc/brands_bloc.dart';
 import 'package:vocal_app/features/brands/presentation/bloc/brand_create_cubit.dart';
 import 'package:vocal_app/features/brands/presentation/bloc/brand_detail_cubit.dart';
-
 
 const String? kWebClientId = null;
 
@@ -148,7 +146,7 @@ Future<void> setupServiceLocator() async {
     () => AuthRepositoryImpl(remote: sl<AuthRemoteDataSource>()),
   );
 
-  // User Profile DS + Repo
+  // ✅ User Profile DS + Repo
   sl.registerLazySingleton<UserProfileRemoteDataSource>(
     () => UserProfileRemoteDataSourceImpl(
       functions: sl<FirebaseFunctions>(),
@@ -161,8 +159,7 @@ Future<void> setupServiceLocator() async {
     () => UserProfileRepositoryImpl(remote: sl<UserProfileRemoteDataSource>()),
   );
 
-
-    // Firebase Storage
+  // Firebase Storage
   sl.registerLazySingleton<FirebaseStorage>(() => FirebaseStorage.instance);
 
   // -----------------------
@@ -177,7 +174,6 @@ Future<void> setupServiceLocator() async {
 
   sl.registerLazySingleton<BrandRepository>(() => BrandRepositoryImpl(remote: sl<BrandRemoteDataSource>()));
 
-  
   sl.registerLazySingleton(() => GetBrandsPage(sl<BrandRepository>()));
   sl.registerLazySingleton(() => WatchBrand(sl<BrandRepository>()));
   sl.registerLazySingleton(() => CreateBrand(sl<BrandRepository>()));
@@ -189,7 +185,6 @@ Future<void> setupServiceLocator() async {
         watchBrand: sl<WatchBrand>(),
         incrementBrandVisit: sl<IncrementBrandVisit>(),
       ));
-
 
   // Usecases
   sl.registerLazySingleton(() => SignInEmail(sl<AuthRepository>()));
