@@ -2,47 +2,11 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    function signedIn() { return request.auth != null; }
-    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
-
-    function isImage() {
-      return request.resource != null
-        && request.resource.contentType.matches('image/.*');
-    }
-
-    function under5MB() {
-      return request.resource != null && request.resource.size < 5 * 1024 * 1024;
-    }
-
-    match /{allPaths=**} { allow read, write: if false; }
-
-    // profile_images/{uid}/{...}
-    match /profile_images/{uid}/{allPaths=**} {
-      allow read: if true; // change to signedIn() if private
-
-      // ✅ only owner + must be image + <5MB
-      allow write: if isOwner(uid) && isImage() && under5MB();
-    }
-  }
-}
-
-
-
-
-
-
-
-
-
-rules_version = '2';
-service firebase.storage {
-  match /b/{bucket}/o {
-
     function signedIn() {
       return request.auth != null;
     }
 
-    function isImage() {
+    function isImageUpload() {
       return request.resource != null
         && request.resource.contentType != null
         && request.resource.contentType.matches('image/.*');
@@ -59,49 +23,26 @@ service firebase.storage {
           || fileName == "profile.png";
     }
 
-    // ✅ compare folder publicId with users/{uid}.publicUserId
+    // ✅ PRODUCTION: Only allow if Firestore Users/{uid}.publicUserId == {publicId}
     function myPublicIdMatches(publicId) {
       return signedIn()
         && firestore.exists(/databases/(default)/documents/Users/$(request.auth.uid))
         && firestore.get(/databases/(default)/documents/Users/$(request.auth.uid)).data.publicUserId == publicId;
     }
 
-    // deny all by default
+    // deny everything by default
     match /{allPaths=**} {
       allow read, write: if false;
     }
 
-    // ✅ PUBLIC profile image path: Personal/{publicUserId}/Profile/profile.jpg
-		match /Personal/{publicId}/Profile/{fileName} {
-  		allow read: if true;
-
-  		allow write: if signedIn()
-    		&& isProfileFile(fileName)
-    		&& isImage()
-    		&& under5MB()
-    		&& myPublicIdMatches(publicId);
-		}
-
-
-    // optional uid-based folder
-    match /profile_images/{uid}/{allPaths=**} {
-      allow read: if true;
-      allow write: if signedIn()
-        && request.auth.uid == uid
-        && isImage()
-        && under5MB();
-    }
-
-    // brand images
-    match /brand_images/{brandId}/{allPaths=**} {
+    match /Personal/{publicId}/Profile/{fileName} {
       allow read: if true;
 
       allow write: if signedIn()
-        && isImage()
+        && isProfileFile(fileName)
+        && isImageUpload()
         && under5MB()
-        && firestore.exists(/databases/(default)/documents/brands/$(brandId))
-        && request.auth.uid ==
-           firestore.get(/databases/(default)/documents/brands/$(brandId)).data.createdByUid;
+        && myPublicIdMatches(publicId);
     }
   }
 }

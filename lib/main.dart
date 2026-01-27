@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
+/*import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
 import 'package:flutter/material.dart';
 
 import 'package:firebase_auth/firebase_auth.dart';
@@ -88,6 +88,105 @@ class _BootstrapAppState extends State<_BootstrapApp> {
       await Future.delayed(const Duration(milliseconds: 30));
 
       if (!kIsWeb) FlutterNativeSplash.remove();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider<AuthBloc>(
+          create: (_) => sl<AuthBloc>()..add(const AuthStarted()),
+        ),
+      ],
+      child: const App(),
+    );
+  }
+}
+
+
+*/
+
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/material.dart';
+
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_native_splash/flutter_native_splash.dart';
+
+import 'firebase_options.dart';
+import 'core/di/service_locator.dart';
+import 'app.dart';
+
+import 'core/offline/offline_queue.dart';
+import 'core/auth/token_refresh_service.dart';
+
+import 'features/presentation/bloc/auth_bloc.dart';
+import 'features/presentation/bloc/auth_event.dart';
+
+Future<void> main() async {
+  final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+
+  // Keep native splash until first frame (mobile only)
+  if (!kIsWeb) {
+    FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+  }
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  // 🚫 App Check DISABLED for development
+  // (Make sure Cloud Storage enforcement is OFF in Firebase Console)
+
+  await setupServiceLocator();
+
+  // Web auth persistence
+  if (kIsWeb) {
+    try {
+      await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+    } catch (_) {}
+  }
+
+  // Start offline queue
+  await sl<OfflineQueue>().start();
+
+  // Token refresh handling
+  sl<TokenRefreshService>().start(
+    onUnauthenticated: () async {
+      await FirebaseAuth.instance.signOut();
+    },
+  );
+
+  runApp(const _BootstrapApp());
+}
+
+class _BootstrapApp extends StatefulWidget {
+  const _BootstrapApp();
+
+  @override
+  State<_BootstrapApp> createState() => _BootstrapAppState();
+}
+
+class _BootstrapAppState extends State<_BootstrapApp> {
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Precache logo to avoid white flash
+      await precacheImage(
+        const AssetImage('assets/logos/logo_black.png'),
+        context,
+      );
+
+      await Future.delayed(const Duration(milliseconds: 30));
+
+      if (!kIsWeb) {
+        FlutterNativeSplash.remove();
+      }
     });
   }
 

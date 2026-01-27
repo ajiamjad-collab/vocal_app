@@ -1,13 +1,15 @@
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+
 import 'package:get_it/get_it.dart';
 import 'package:path/path.dart' as path;
+
 import 'package:vocal_app/features/profile/data/datasources/user_profile_remote_ds.dart';
-// ✅ reuse your existing crop/compress flow
 import 'package:vocal_app/core/media/helpers/image_helper.dart';
 import 'package:vocal_app/core/media/rules/image_rules.dart';
 
@@ -22,10 +24,8 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
   final _auth = GetIt.I<FirebaseAuth>();
   final _storage = GetIt.I<FirebaseStorage>();
   final _db = GetIt.I<FirebaseFirestore>();
-
   final _remote = GetIt.I<UserProfileRemoteDataSource>();
 
-  // ✅ CHANGED
   static const String publicProfileCollection = "Personal";
 
   Stream<PublicUserProfile>? _stream;
@@ -88,9 +88,6 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
     });
   }
 
-  // ============================
-  // ✅ Upload profile photo
-  // ============================
   Future<void> _changePhoto(PublicUserProfile p) async {
     final source = await showModalBottomSheet<_PickSource>(
       context: context,
@@ -117,93 +114,73 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
     if (source == null) return;
 
     await _guard(() async {
-      // ✅ Pick + Crop(1:1) + Compress
       final media = await ImageHelper.pickProcessSingle(
         getContext: () => mounted ? context : null,
         useCase: ImageUseCase.profile,
         fromCamera: source == _PickSource.camera,
       );
-
       if (media == null) return;
 
       final file = File(media.xfile.path);
 
-      // ✅ MUST be signed in
       final uid = _auth.currentUser?.uid;
-      if (uid == null) {
-        throw Exception("Not signed in");
-      }
+      if (uid == null) throw Exception("Not signed in");
 
-      // ✅ Read publicUserId from users/{uid}
       final usersDoc = await _db.collection('Users').doc(uid).get();
       if (!usersDoc.exists) {
         throw Exception("Users/$uid not found. Call createUserProfile first.");
       }
 
       final publicUserId = (usersDoc.data()?['publicUserId'] ?? '').toString().trim();
-      if (publicUserId.isEmpty) {
-        throw Exception("publicUserId missing in Users/$uid");
-      }
+      if (publicUserId.isEmpty) throw Exception("publicUserId missing in Users/$uid");
 
-      // ✅ 5MB check (matches rules)
       final bytes = await file.length();
       if (bytes > 5 * 1024 * 1024) {
-        throw Exception(
-          "Image too large (>5MB). Current: ${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB",
-        );
+        throw Exception("Image too large (>5MB).");
       }
 
+      final ext = path.extension(file.path).toLowerCase();
+      final fileName = (ext == ".png")
+          ? "profile.png"
+          : (ext == ".jpeg" ? "profile.jpeg" : "profile.jpg");
+      final contentType = fileName.endsWith(".png") ? "image/png" : "image/jpeg";
 
-     // 🔍 Detect actual file extension
-final ext = path.extension(file.path).toLowerCase(); // .jpg | .jpeg | .png
+      final storagePath = "$publicProfileCollection/$publicUserId/Profile/$fileName";
 
-final fileName = (ext == ".png")
-    ? "profile.png"
-    : (ext == ".jpeg" ? "profile.jpeg" : "profile.jpg");
+      debugPrint("UPLOAD DEBUG:");
+      debugPrint(" uid=$uid");
+      debugPrint(" publicUserId(from Users doc)=$publicUserId");
+      debugPrint(" p.publicUserId(from stream)=${p.publicUserId}");
+      debugPrint(" storagePath=$storagePath");
+      debugPrint(" fileBytes=$bytes");
+      debugPrint(" contentType=$contentType");
 
-final contentType = fileName.endsWith(".png") ? "image/png" : "image/jpeg";
+      final ref = _storage.ref().child(storagePath);
 
-// ✅ Upload to: Personal/{publicUserId}/Profile/profile.(jpg|jpeg|png)
-final storagePath = "$publicProfileCollection/$publicUserId/Profile/$fileName";
+      final meta = SettableMetadata(
+        contentType: contentType,
+        customMetadata: {"uid": uid, "publicUserId": publicUserId},
+      );
 
-debugPrint("UPLOAD DEBUG:");
-debugPrint(" uid=$uid");
-debugPrint(" publicUserId(from Users doc)=$publicUserId");
-debugPrint(" p.publicUserId(from stream)=${p.publicUserId}");
-debugPrint(" storagePath=$storagePath");
-debugPrint(" fileBytes=$bytes");
-debugPrint(" contentType=$contentType");
+      final snap = await ref.putFile(file, meta);
+      final url = await snap.ref.getDownloadURL();
 
-final ref = _storage.ref().child(storagePath);
+      // cache-buster
+      final urlWithTs = "$url&ts=${DateTime.now().millisecondsSinceEpoch}";
 
-final meta = SettableMetadata(
-  contentType: contentType,
-  customMetadata: {
-    "uid": uid,
-    "publicUserId": publicUserId,
-  },
-);
+      await _remote.setMyProfilePhotoUrl(photoUrl: urlWithTs);
 
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
 
-      try {
-  final snap = await ref.putFile(file, meta);
-  final url = await snap.ref.getDownloadURL();
-
-  await _remote.setMyProfilePhotoUrl(photoUrl: url);
-
-  _toast("Photo updated");
-} on FirebaseException catch (e) {
-  debugPrint("❌ Upload failed: code=${e.code} message=${e.message}");
-  rethrow;
-}
-
-
+      _toast("Photo updated");
     });
   }
 
   Future<void> _signOut() async {
     await _guard(() async {
       await _auth.signOut();
+      _toast("Signed out");
     });
   }
 
@@ -229,30 +206,31 @@ final meta = SettableMetadata(
     await _guard(() async {
       final user = _auth.currentUser;
       if (user == null) return;
-      await user.delete(); // may require recent login
+      await user.delete();
+      _toast("Account deleted");
     });
   }
 
-  // ✅ FIX: catch order (FirebaseAuthException first)
   Future<void> _guard(Future<void> Function() fn) async {
     try {
       if (!mounted) return;
       FocusScope.of(context).unfocus();
       await fn();
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint("❌ Functions error: code=${e.code} message=${e.message} details=${e.details}");
+      _toast("${e.code}: ${e.message ?? ''}".trim());
     } on FirebaseAuthException catch (e) {
       _toast(e.message ?? e.code);
     } on FirebaseException catch (e) {
       final msg = (e.message ?? "").trim();
       final lower = msg.toLowerCase();
-
-      if (e.code == "unauthorized" ||
-          e.code == "permission-denied" ||
-          lower.contains("permission")) {
-        _toast("Permission denied (403). Check Storage Rules / App Check.");
+      if (e.code == "unauthorized" || e.code == "permission-denied" || lower.contains("permission")) {
+        _toast("Permission denied (403). Check Storage Rules.");
       } else {
         _toast("${e.code}: $msg".trim());
       }
     } catch (e) {
+      debugPrint("❌ Unknown error: $e");
       _toast(e.toString());
     }
   }
@@ -305,10 +283,7 @@ final meta = SettableMetadata(
                         children: [
                           Text(fullName, style: Theme.of(context).textTheme.titleLarge),
                           const SizedBox(height: 6),
-                          Text(
-                            "Public ID: ${p.publicUserId}",
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
+                          Text("Public ID: ${p.publicUserId}", style: Theme.of(context).textTheme.bodyMedium),
                         ],
                       ),
                     ),
@@ -322,6 +297,8 @@ final meta = SettableMetadata(
               ),
             ),
             const SizedBox(height: 16),
+
+            // ✅ Now these methods are USED, no more "unused_element" warnings
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -346,6 +323,7 @@ final meta = SettableMetadata(
                 ),
               ),
             ),
+
             const SizedBox(height: 16),
             Card(
               child: Padding(
@@ -359,8 +337,7 @@ final meta = SettableMetadata(
                     const SizedBox(height: 10),
                     _row("Public ID", p.publicUserId),
                     const SizedBox(height: 10),
-                    // ✅ CHANGED
-                    _row("Photo stored at","Storage: $publicProfileCollection/${p.publicUserId}/Profile/profile.jpg",),
+                    _row("Photo stored at", "Storage: $publicProfileCollection/${p.publicUserId}/Profile/profile.jpg"),
                   ],
                 ),
               ),

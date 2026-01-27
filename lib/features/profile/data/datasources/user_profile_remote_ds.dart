@@ -112,8 +112,7 @@ class UserProfileRemoteDataSourceImpl implements UserProfileRemoteDataSource {
       final publicUserId = (data["publicUserId"] ?? "").toString().trim();
       if (publicUserId.isEmpty) continue;
 
-      final publicStream =
-          firestore.collection(publicProfileCollection).doc(publicUserId).snapshots();
+      final publicStream = firestore.collection(publicProfileCollection).doc(publicUserId).snapshots();
 
       await for (final pubSnap in publicStream) {
         final pub = pubSnap.data() ?? {};
@@ -139,8 +138,12 @@ class UserProfileRemoteDataSourceImpl implements UserProfileRemoteDataSource {
   @override
   Future<void> setMyProfilePhotoUrl({required String photoUrl}) async {
     final callable = functions.httpsCallable("setMyProfilePhotoUrl");
-    await callable.call({
-      "photoUrl": photoUrl.trim(),
-    });
+    try {
+      // ✅ no unused variable warning
+      await callable.call({"photoUrl": photoUrl.trim()});
+    } on FirebaseFunctionsException {
+      // ✅ keeps original stack trace + satisfies linter
+      rethrow;
+    }
   }
 }
